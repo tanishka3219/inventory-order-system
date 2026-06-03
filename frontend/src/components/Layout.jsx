@@ -1,45 +1,46 @@
-import React from 'react';
-import { Outlet, Navigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useState, useEffect, useContext } from 'react';
 import Sidebar from './Sidebar';
-import Navbar from './Navbar';
-import { Loader2 } from 'lucide-react';
+import { Moon, Sun, LogOut } from 'lucide-react';
+import { AuthContext } from '../context/AuthContext';
 
-const Layout = () => {
-  const { token, loading } = useAuth();
-  const location = useLocation();
+const Layout = ({ children }) => {
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('darkMode') === 'true');
+  const { user, logout } = useContext(AuthContext);
 
-  // If auth is loading, render a beautiful full-screen loader
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center gap-4 transition-colors duration-200">
-        <Loader2 className="animate-spin text-primary-600 dark:text-primary-400" size={40} />
-        <p className="text-sm font-semibold text-slate-500 dark:text-slate-400 tracking-wider uppercase animate-pulse">
-          Synchronizing session...
-        </p>
-      </div>
-    );
-  }
-
-  // Route protection redirect to login
-  if (!token) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
-  }
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('darkMode', 'true');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('darkMode', 'false');
+    }
+  }, [darkMode]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-200">
-      {/* Permanent Sidebar */}
+    <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-dark-900 transition-colors">
       <Sidebar />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <Navbar />
-        
-        {/* Dynamic sub-routes container */}
-        <main className="flex-1 overflow-y-auto p-8 relative">
-          <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
-            <Outlet />
+      <div className="flex flex-col flex-1 w-full overflow-y-auto">
+        <header className="h-16 border-b dark:border-dark-800 bg-white dark:bg-dark-900 flex items-center justify-end px-6 space-x-4 shrink-0 transition-colors">
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Welcome, <span className="font-bold text-primary-600 dark:text-primary-500">{user?.username}</span> ({user?.role})
           </div>
+          <button 
+            onClick={() => setDarkMode(!darkMode)} 
+            className="p-2 text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-500 transition-colors"
+          >
+            {darkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+          <button 
+            onClick={logout}
+            className="flex items-center space-x-1 p-2 text-red-500 hover:text-red-700 transition-colors"
+            title="Logout"
+          >
+            <LogOut size={20} />
+          </button>
+        </header>
+        <main className="p-6 md:p-8 flex-1 text-gray-900 dark:text-gray-100">
+          {children}
         </main>
       </div>
     </div>

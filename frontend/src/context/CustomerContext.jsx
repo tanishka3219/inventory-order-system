@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useState, useCallback } from 'react';
 import api from '../services/api';
+import { toast } from 'react-toastify';
 
-const CustomerContext = createContext();
+export const CustomerContext = createContext();
 
 export const CustomerProvider = ({ children }) => {
   const [customers, setCustomers] = useState([]);
@@ -10,48 +11,42 @@ export const CustomerProvider = ({ children }) => {
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await api.get('/api/customers');
+      const response = await api.get('/customers');
       setCustomers(response.data);
+    } catch (error) {
+      toast.error('Failed to fetch customers');
+    } finally {
       setLoading(false);
-    } catch (err) {
-      setLoading(false);
-      console.error('Error fetching customers', err);
     }
   }, []);
 
-  const createCustomer = async (customerData) => {
+  const addCustomer = async (customerData) => {
     try {
-      const res = await api.post('/api/customers', customerData);
-      await fetchCustomers();
-      return res.data;
-    } catch (err) {
-      throw err;
+      await api.post('/customers', customerData);
+      toast.success('Customer added successfully');
+      fetchCustomers();
+      return true;
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to add customer');
+      return false;
     }
   };
 
   const deleteCustomer = async (id) => {
     try {
-      const res = await api.delete(`/api/customers/${id}`);
-      await fetchCustomers();
-      return res.data;
-    } catch (err) {
-      throw err;
+      await api.delete(`/customers/${id}`);
+      toast.success('Customer deleted successfully');
+      fetchCustomers();
+      return true;
+    } catch (error) {
+      toast.error('Failed to delete customer');
+      return false;
     }
   };
 
-  const value = {
-    customers,
-    loading,
-    fetchCustomers,
-    createCustomer,
-    deleteCustomer,
-  };
-
   return (
-    <CustomerContext.Provider value={value}>
+    <CustomerContext.Provider value={{ customers, loading, fetchCustomers, addCustomer, deleteCustomer }}>
       {children}
     </CustomerContext.Provider>
   );
 };
-
-export const useCustomers = () => useContext(CustomerContext);

@@ -1,93 +1,48 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useState, useEffect } from 'react';
 import api from '../services/api';
 
-const AuthContext = createContext();
+export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
-  // Sync user info on boot if token exists
   useEffect(() => {
-    const initAuth = async () => {
+    const checkUser = async () => {
+      const token = localStorage.getItem('token');
       if (token) {
         try {
-          const res = await api.get('/api/auth/me');
-          setUser(res.data);
-        } catch (err) {
-          console.error("Auth verification failed", err);
-          logout();
+          const response = await api.get('/auth/me');
+          setUser(response.data);
+        } catch (error) {
+          localStorage.removeItem('token');
         }
       }
       setLoading(false);
     };
-    initAuth();
-  }, [token]);
+    checkUser();
+  }, []);
 
-  const login = async (email, password) => {
-    setLoading(true);
-    try {
-      // We use the JSON login route since it's cleaner for React forms
-      const res = await api.post('/api/auth/login-json', { email, password });
-      const accessToken = res.data.access_token;
-      
-      localStorage.setItem('token', accessToken);
-      setToken(accessToken);
-      
-      // Fetch user profile immediately
-      const profileRes = await api.get('/api/auth/me');
-      setUser(profileRes.data);
-      setLoading(false);
-      return profileRes.data;
-    } catch (err) {
-      setLoading(false);
-      throw err;
-    }
-  };
-
-  const register = async (email, password, fullName, role = "staff") => {
-    try {
-      const res = await api.post('/api/auth/register', {
-        email,
-        password,
-        full_name: fullName,
-        role,
-      });
-      return res.data;
-    } catch (err) {
-      throw err;
-    }
+  const login = async (username, password) => {
+    const formData = new URLSearchParams();
+    formData.append('username', username);
+    formData.append('password', password);
+    const response = await api.post('/auth/login', formData, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    localStorage.setItem('token', response.data.access_token);
+    const userRes = await api.get('/auth/me');
+    setUser(userRes.data);
   };
 
   const logout = () => {
     localStorage.removeItem('token');
-    setToken(null);
     setUser(null);
   };
 
-  const hasRole = (allowedRoles) => {
-    return user && allowedRoles.includes(user.role);
-  };
-
-  const value = {
-    user,
-    token,
-    loading,
-    login,
-    register,
-    logout,
-    hasRole,
-    isAdmin: user?.role === 'admin',
-    isManager: user?.role === 'manager' || user?.role === 'admin',
-    isStaff: user?.role === 'staff',
-  };
-
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider value={{ user, login, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );
 };
-
-export const useAuth = () => useContext(AuthContext);

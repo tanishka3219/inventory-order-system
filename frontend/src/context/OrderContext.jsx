@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useState, useCallback } from 'react';
 import api from '../services/api';
+import { toast } from 'react-toastify';
 
-const OrderContext = createContext();
+export const OrderContext = createContext();
 
 export const OrderProvider = ({ children }) => {
   const [orders, setOrders] = useState([]);
@@ -10,69 +11,42 @@ export const OrderProvider = ({ children }) => {
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await api.get('/api/orders');
+      const response = await api.get('/orders');
       setOrders(response.data);
+    } catch (error) {
+      toast.error('Failed to fetch orders');
+    } finally {
       setLoading(false);
-    } catch (err) {
-      setLoading(false);
-      console.error('Error fetching orders', err);
     }
   }, []);
 
-  const getOrderDetails = async (id) => {
+  const addOrder = async (orderData) => {
     try {
-      const res = await api.get(`/api/orders/${id}`);
-      return res.data;
-    } catch (err) {
-      throw err;
-    }
-  };
-
-  const createOrder = async (orderData) => {
-    try {
-      const res = await api.post('/api/orders', orderData);
-      await fetchOrders();
-      return res.data;
-    } catch (err) {
-      throw err;
+      await api.post('/orders', orderData);
+      toast.success('Order placed successfully');
+      fetchOrders();
+      return true;
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to place order');
+      return false;
     }
   };
 
   const deleteOrder = async (id) => {
     try {
-      const res = await api.delete(`/api/orders/${id}`);
-      await fetchOrders();
-      return res.data;
-    } catch (err) {
-      throw err;
+      await api.delete(`/orders/${id}`);
+      toast.success('Order cancelled successfully');
+      fetchOrders();
+      return true;
+    } catch (error) {
+      toast.error('Failed to cancel order');
+      return false;
     }
-  };
-
-  const updateOrderStatus = async (id, status) => {
-    try {
-      const res = await api.put(`/api/orders/${id}/status`, { status });
-      await fetchOrders();
-      return res.data;
-    } catch (err) {
-      throw err;
-    }
-  };
-
-  const value = {
-    orders,
-    loading,
-    fetchOrders,
-    getOrderDetails,
-    createOrder,
-    deleteOrder,
-    updateOrderStatus,
   };
 
   return (
-    <OrderContext.Provider value={value}>
+    <OrderContext.Provider value={{ orders, loading, fetchOrders, addOrder, deleteOrder }}>
       {children}
     </OrderContext.Provider>
   );
 };
-
-export const useOrders = () => useContext(OrderContext);

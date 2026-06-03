@@ -1,456 +1,258 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useOrders } from '../context/OrderContext';
-import { useCustomers } from '../context/CustomerContext';
-import { useAuth } from '../context/AuthContext';
-import api from '../services/api';
-import Modal from '../components/Modal';
-import { 
-  Plus, 
-  Trash2, 
-  Eye, 
-  XOctagon, 
-  PlusCircle, 
-  MinusCircle, 
-  AlertCircle, 
-  Loader2,
-  Calendar,
-  DollarSign
-} from 'lucide-react';
+import { useContext, useEffect, useState, useMemo } from 'react';
+import { OrderContext } from '../context/OrderContext';
+import { ProductContext } from '../context/ProductContext';
+import { CustomerContext } from '../context/CustomerContext';
+import { Plus, Trash2, Download, Filter } from 'lucide-react';
+import { useForm, useFieldArray } from 'react-hook-form';
+import { downloadCSV } from '../utils/csv';
 
 const Orders = () => {
-  const { orders, loading, fetchOrders, createOrder, deleteOrder, updateOrderStatus } = useOrders();
-  const { customers, fetchCustomers } = useCustomers();
-  const { isManager } = useAuth();
-  const navigate = useNavigate();
+  const { orders, loading, fetchOrders, addOrder, deleteOrder } = useContext(OrderContext);
+  const { products, fetchProducts } = useContext(ProductContext);
+  const { customers, fetchCustomers } = useContext(CustomerContext);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('');
 
-  // Modals state
-  const [isAddOpen, setIsAddOpen] = useState(false);
-  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState(null);
+  const { register, control, handleSubmit, watch, reset, formState: { errors } } = useForm({
+    defaultValues: {
+      customer_id: '',
+      items: [{ product_id: '', quantity: 1 }]
+    }
+  });
 
-  // Order creator state
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
-  const [orderItems, setOrderItems] = useState([{ product_id: '', quantity: 1 }]);
-  const [allCatalogProducts, setAllCatalogProducts] = useState([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-
-  const [apiError, setApiError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const { fields, append, remove } = useFieldArray({ control, name: 'items' });
+  const watchItems = watch('items');
 
   useEffect(() => {
     fetchOrders();
+    fetchProducts();
     fetchCustomers();
-  }, [fetchOrders, fetchCustomers]);
+  }, [fetchOrders, fetchProducts, fetchCustomers]);
 
-  // Load all products for selector dropdown when modal opens
-  const handleOpenAddOrder = async () => {
-    setSelectedCustomerId('');
-    setOrderItems([{ product_id: '', quantity: 1 }]);
-    setApiError('');
-    setCatalogLoading(true);
-    setIsAddOpen(true);
-    try {
-      const res = await api.get('/api/products?limit=1000');
-      setAllCatalogProducts(res.data.items);
-    } catch (err) {
-      console.error('Failed to load products for checkout list', err);
-    } finally {
-      setCatalogLoading(false);
-    }
-  };
+  const filteredOrders = useMemo(() => {
+    if (!statusFilter) return orders;
+    return orders.filter(order => order.order_status === statusFilter);
+  }, [orders, statusFilter]);
 
-  // Add a product item row
-  const addOrderItemRow = () => {
-    setOrderItems([...orderItems, { product_id: '', quantity: 1 }]);
-  };
-
-  // Remove a product item row
-  const removeOrderItemRow = (index) => {
-    const updated = [...orderItems];
-    updated.splice(index, 1);
-    setOrderItems(updated);
-  };
-
-  // Handle value change inside row
-  const handleRowChange = (index, field, value) => {
-    const updated = [...orderItems];
-    updated[index][field] = value;
-    setOrderItems(updated);
-  };
-
-  // Calculate real-time totals
-  const getTotals = () => {
-    let grandTotal = 0;
-    const itemsWithDetails = orderItems.map(item => {
-      const prod = allCatalogProducts.find(p => p.id === parseInt(item.product_id));
-      const price = prod ? prod.price : 0;
-      const subtotal = price * item.quantity;
-      grandTotal += subtotal;
-      return { ...item, price, subtotal };
-    });
-    return { grandTotal, itemsWithDetails };
-  };
-
-  const { grandTotal, itemsWithDetails } = getTotals();
-
-  // Submit checkout order
-  const handleCheckoutSubmit = async (e) => {
-    e.preventDefault();
-    setApiError('');
-    
-    if (!selectedCustomerId) {
-      setApiError('Please select a customer.');
-      return;
-    }
-
-    // Filter empty selections
-    const validItems = orderItems.filter(item => item.product_id !== '');
-    if (validItems.length === 0) {
-      setApiError('Please add at least one product to the order.');
-      return;
-    }
-
-    // Check stock boundaries locally before calling backend
-    for (const item of validItems) {
-      const prod = allCatalogProducts.find(p => p.id === parseInt(item.product_id));
-      if (prod && prod.quantity_in_stock < item.quantity) {
-        setApiError(`Insufficient stock for product "${prod.product_name}". In Stock: ${prod.quantity_in_stock}`);
-        return;
-      }
-    }
-
-    setSubmitting(true);
-    try {
-      const payload = {
-        customer_id: parseInt(selectedCustomerId),
-        items: validItems.map(item => ({
-          product_id: parseInt(item.product_id),
-          quantity: parseInt(item.quantity)
-        }))
+  const handleExport = () => {
+    const exportData = filteredOrders.map(order => {
+      const customer = customers.find(c => c.id === order.customer_id);
+      return {
+        'Order ID': order.id,
+        'Customer': customer ? customer.full_name : order.customer_id,
+        'Date': new Date(order.created_at).toLocaleDateString(),
+        'Total Amount': `$${order.total_amount.toFixed(2)}`,
+        'Status': order.order_status
       };
-      await createOrder(payload);
-      setIsAddOpen(false);
-    } catch (err) {
-      setApiError(err.cleanMessage || 'Failed to place order. Please review quantities.');
-    } finally {
-      setSubmitting(false);
+    });
+    downloadCSV(exportData, 'orders.csv');
+  };
+
+  const openModal = () => {
+    reset({ customer_id: '', items: [{ product_id: '', quantity: 1 }] });
+    setIsModalOpen(true);
+  };
+
+  const onSubmit = async (data) => {
+    const formattedData = {
+      customer_id: parseInt(data.customer_id),
+      items: data.items.map(item => ({
+        product_id: parseInt(item.product_id),
+        quantity: parseInt(item.quantity)
+      }))
+    };
+    
+    const success = await addOrder(formattedData);
+    if (success) {
+      setIsModalOpen(false);
+      fetchProducts();
     }
   };
 
-  const handleCancelOrder = async (orderId) => {
-    if (window.confirm("Are you sure you want to cancel this order? This will restore product stock levels.")) {
-      try {
-        await updateOrderStatus(orderId, 'Cancelled');
-      } catch (err) {
-        alert(err.response?.data?.detail || 'Failed to cancel order.');
+  const calculateTotal = () => {
+    let total = 0;
+    watchItems.forEach(item => {
+      if (item.product_id && item.quantity) {
+        const product = products.find(p => p.id === parseInt(item.product_id));
+        if (product) {
+          total += product.price * parseInt(item.quantity);
+        }
       }
-    }
-  };
-
-  const openDelete = (order) => {
-    setSelectedOrder(order);
-    setApiError('');
-    setIsDeleteOpen(true);
-  };
-
-  const onDeleteConfirm = async () => {
-    setSubmitting(true);
-    try {
-      await deleteOrder(selectedOrder.id);
-      setIsDeleteOpen(false);
-    } catch (err) {
-      setApiError(err.cleanMessage || 'Failed to delete order.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const getStatusColor = (status) => {
-    if (status === 'Completed') return 'bg-green-500/10 text-green-500';
-    if (status === 'Cancelled') return 'bg-red-500/10 text-red-500';
-    return 'bg-amber-500/10 text-amber-500';
+    });
+    return total;
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-200">
-      {/* Actions Bar */}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs text-slate-400 font-medium">Record and process customer transaction orders and checkout histories.</p>
-        </div>
-        <button 
-          onClick={handleOpenAddOrder} 
-          className="btn-primary h-10 px-4"
-        >
-          <Plus size={16} />
-          <span>New Order</span>
-        </button>
-      </div>
-
-      {/* Orders Table */}
-      <div className="glass-panel rounded-xl shadow-sm overflow-hidden border border-slate-200/50 dark:border-slate-800/50">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200/50 dark:divide-slate-800/50">
-            <thead>
-              <tr className="bg-slate-55 dark:bg-slate-900/50">
-                <th className="table-header">Order ID</th>
-                <th className="table-header">Customer</th>
-                <th className="table-header">Date</th>
-                <th className="table-header text-right">Total amount</th>
-                <th className="table-header text-center">Status</th>
-                <th className="table-header text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200/30 dark:divide-slate-800/30">
-              {loading ? (
-                <tr>
-                  <td colSpan="6" className="table-cell py-12 text-center">
-                    <div className="flex items-center justify-center gap-2.5">
-                      <Loader2 className="animate-spin text-primary-600 dark:text-primary-400" size={24} />
-                      <span className="text-slate-400 font-semibold">Updating order ledgers...</span>
-                    </div>
-                  </td>
-                </tr>
-              ) : orders.length > 0 ? (
-                orders.map((order) => (
-                  <tr key={order.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/10">
-                    <td className="table-cell font-mono text-xs font-semibold text-slate-700 dark:text-slate-200">
-                      ORD-{order.id.toString().padStart(5, '0')}
-                    </td>
-                    <td className="table-cell">
-                      <div className="font-semibold text-slate-800 dark:text-slate-100">{order.customer.full_name}</div>
-                      <div className="text-xs text-slate-400">{order.customer.email}</div>
-                    </td>
-                    <td className="table-cell text-xs text-slate-405">
-                      <div className="flex items-center gap-1.5">
-                        <Calendar size={13} className="text-slate-400" />
-                        <span>{new Date(order.created_at).toLocaleString()}</span>
-                      </div>
-                    </td>
-                    <td className="table-cell text-right font-bold text-slate-800 dark:text-white">
-                      ${order.total_amount.toFixed(2)}
-                    </td>
-                    <td className="table-cell text-center">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${getStatusColor(order.order_status)}`}>
-                        {order.order_status}
-                      </span>
-                    </td>
-                    <td className="table-cell text-right">
-                      <div className="inline-flex gap-2">
-                        <button
-                          onClick={() => navigate(`/orders/${order.id}`)}
-                          className="p-1 text-slate-450 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
-                          title="View Invoice Details"
-                        >
-                          <Eye size={16} />
-                        </button>
-                        {order.order_status !== 'Cancelled' && isManager && (
-                          <button
-                            onClick={() => handleCancelOrder(order.id)}
-                            className="p-1 text-slate-450 hover:text-amber-500 transition-colors"
-                            title="Cancel Order"
-                          >
-                            <XOctagon size={16} />
-                          </button>
-                        )}
-                        {isManager && (
-                          <button
-                            onClick={() => openDelete(order)}
-                            className="p-1 text-slate-450 hover:text-red-500 transition-colors"
-                            title="Delete Order"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan="6" className="table-cell text-center py-12 text-slate-400 font-semibold">
-                    No orders placed yet. Click 'New Order' to process sales transactions.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ======================================= */}
-      {/* MODAL: CREATE ORDER */}
-      {/* ======================================= */}
-      <Modal isOpen={isAddOpen} onClose={() => setIsAddOpen(false)} title="Process New Order Checkout">
-        {catalogLoading ? (
-          <div className="py-12 flex flex-col items-center justify-center gap-3">
-            <Loader2 className="animate-spin text-primary-600" size={32} />
-            <span className="text-sm font-semibold text-slate-400">Loading catalog indexes...</span>
-          </div>
-        ) : (
-          <form onSubmit={handleCheckoutSubmit} className="space-y-5">
-            {apiError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg text-xs font-semibold flex gap-2">
-                <AlertCircle size={16} className="shrink-0" />
-                <span>{apiError}</span>
-              </div>
-            )}
-
-            {/* Select Customer */}
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Select Buyer Customer</label>
-              <select
-                className="mt-1.5 form-input py-2.5"
-                value={selectedCustomerId}
-                onChange={(e) => setSelectedCustomerId(e.target.value)}
-                required
-              >
-                <option value="">-- Choose registered customer --</option>
-                {customers.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.full_name} ({c.email})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Order Items Rows */}
-            <div className="space-y-3.5">
-              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
-                <label className="block text-xs font-bold text-slate-450 uppercase tracking-wider">Items Registry</label>
-                <button
-                  type="button"
-                  onClick={addOrderItemRow}
-                  className="text-xs font-bold text-primary-600 hover:text-primary-750 dark:text-primary-400 dark:hover:text-primary-300 flex items-center gap-1"
-                >
-                  <PlusCircle size={14} />
-                  <span>Add Item</span>
-                </button>
-              </div>
-
-              <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                {orderItems.map((item, index) => {
-                  const selectedProd = allCatalogProducts.find(p => p.id === parseInt(item.product_id));
-                  const stockMax = selectedProd ? selectedProd.quantity_in_stock : 0;
-                  
-                  return (
-                    <div key={index} className="flex gap-3 items-start border border-slate-100 dark:border-slate-800/60 p-3.5 rounded-xl bg-slate-50/50 dark:bg-slate-900/30">
-                      
-                      {/* Product Selector */}
-                      <div className="flex-1 min-w-0">
-                        <select
-                          className="form-input mt-0 py-2"
-                          value={item.product_id}
-                          onChange={(e) => handleRowChange(index, 'product_id', e.target.value)}
-                          required
-                        >
-                          <option value="">-- Select Product --</option>
-                          {allCatalogProducts.map(p => (
-                            <option key={p.id} value={p.id}>
-                              {p.product_name} - ${p.price.toFixed(2)} (Stock: {p.quantity_in_stock})
-                            </option>
-                          ))}
-                        </select>
-                        
-                        {/* Show stock availability */}
-                        {selectedProd && (
-                          <div className="mt-1.5 flex items-center gap-2 text-xs font-medium">
-                            <span className={stockMax === 0 ? 'text-red-500 font-bold' : stockMax <= 10 ? 'text-amber-500' : 'text-slate-450'}>
-                              Stock Available: {stockMax} {stockMax === 0 ? '(Out of stock)' : ''}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Quantity input */}
-                      <div className="w-24">
-                        <input
-                          type="number"
-                          className="form-input mt-0 py-2 text-center"
-                          value={item.quantity}
-                          min="1"
-                          max={stockMax || 1}
-                          onChange={(e) => handleRowChange(index, 'quantity', parseInt(e.target.value) || 1)}
-                          required
-                        />
-                      </div>
-
-                      {/* Subtotal preview */}
-                      <div className="w-24 text-right pt-2.5 font-semibold text-sm">
-                        ${selectedProd ? (selectedProd.price * item.quantity).toFixed(2) : '0.00'}
-                      </div>
-
-                      {/* Remove Button */}
-                      {orderItems.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeOrderItemRow(index)}
-                          className="p-2 text-slate-400 hover:text-red-500 pt-2"
-                        >
-                          <MinusCircle size={16} />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Grand Total banner */}
-            <div className="p-4 bg-slate-50 dark:bg-slate-900 rounded-xl flex justify-between items-center border border-slate-200/50 dark:border-slate-800/80">
-              <span className="text-xs font-bold text-slate-450 uppercase tracking-wider">Grand Total Amount</span>
-              <div className="flex items-center text-xl font-black text-slate-800 dark:text-white">
-                <DollarSign size={20} className="text-slate-450" />
-                <span>{grandTotal.toFixed(2)}</span>
-              </div>
-            </div>
-
-            {/* Submit */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-              <button type="button" onClick={() => setIsAddOpen(false)} className="btn-secondary">
-                Cancel
-              </button>
-              <button type="submit" disabled={submitting} className="btn-primary min-w-[100px]">
-                {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Complete checkout'}
-              </button>
-            </div>
-          </form>
-        )}
-      </Modal>
-
-      {/* ======================================= */}
-      {/* MODAL: DELETE CONFIRMATION */}
-      {/* ======================================= */}
-      <Modal isOpen={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} title="Delete Order Record">
-        <div className="space-y-4">
-          {apiError && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg text-xs font-semibold flex gap-2">
-              <AlertCircle size={16} className="shrink-0" />
-              <span>{apiError}</span>
-            </div>
-          )}
-
-          <p className="text-sm text-slate-650 dark:text-slate-350">
-            Are you sure you want to permanently delete order record <span className="font-semibold text-slate-850 dark:text-white">ORD-{selectedOrder?.id.toString().padStart(5, '0')}</span>? 
-            Deleting an order record will restore stock levels of its items if they were not already cancelled.
-          </p>
-
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-            <button type="button" onClick={() => setIsDeleteOpen(false)} className="btn-secondary">
-              Cancel
-            </button>
-            <button 
-              type="button" 
-              onClick={onDeleteConfirm} 
-              disabled={submitting} 
-              className="btn-danger min-w-[80px]"
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Orders</h1>
+        
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Filter className="absolute left-3 top-2.5 text-gray-400" size={18} />
+            <select 
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="pl-10 pr-4 py-2 border dark:border-dark-700 dark:bg-dark-800 dark:text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 appearance-none bg-white"
             >
-              {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Delete'}
-            </button>
+              <option value="">All Statuses</option>
+              <option value="Pending">Pending</option>
+              <option value="Completed">Completed</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
+          </div>
+          
+          <button 
+            onClick={handleExport}
+            className="bg-white hover:bg-gray-50 dark:bg-dark-800 dark:hover:bg-dark-700 text-gray-700 dark:text-gray-200 border dark:border-dark-700 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm"
+          >
+            <Download size={18} /> <span className="hidden sm:inline">Export</span>
+          </button>
+          <button 
+            onClick={openModal}
+            className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm"
+          >
+            <Plus size={18} /> <span className="hidden sm:inline">Create Order</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="glass-panel dark:bg-dark-800/80 border-transparent dark:border-dark-700 overflow-hidden">
+        {loading ? (
+          <div className="p-8 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div></div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left whitespace-nowrap">
+              <thead className="bg-gray-50 dark:bg-dark-900 border-b dark:border-dark-700">
+                <tr>
+                  <th className="px-6 py-4 font-medium text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider">Order ID</th>
+                  <th className="px-6 py-4 font-medium text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider">Customer</th>
+                  <th className="px-6 py-4 font-medium text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider">Date</th>
+                  <th className="px-6 py-4 font-medium text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider">Total</th>
+                  <th className="px-6 py-4 font-medium text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-4 font-medium text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-dark-700">
+                {filteredOrders.length === 0 ? (
+                  <tr><td colSpan="6" className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">No orders found.</td></tr>
+                ) : (
+                  filteredOrders.map(order => {
+                    const customer = customers.find(c => c.id === order.customer_id);
+                    return (
+                      <tr key={order.id} className="hover:bg-gray-50/50 dark:hover:bg-dark-700/50 transition-colors">
+                        <td className="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">#{order.id}</td>
+                        <td className="px-6 py-4 text-gray-500 dark:text-gray-400">{customer ? customer.full_name : `Customer ${order.customer_id}`}</td>
+                        <td className="px-6 py-4 text-gray-500 dark:text-gray-400">{new Date(order.created_at).toLocaleDateString()}</td>
+                        <td className="px-6 py-4 font-medium dark:text-gray-200">${order.total_amount.toFixed(2)}</td>
+                        <td className="px-6 py-4">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            order.order_status === 'Completed' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 
+                            order.order_status === 'Pending' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' :
+                            'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                          }`}>
+                            {order.order_status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button onClick={() => { if(window.confirm('Delete this order?')) deleteOrder(order.id); }} className="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 transition-colors"><Trash2 size={18} /></button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+          <div className="bg-white dark:bg-dark-800 rounded-2xl shadow-xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto border dark:border-dark-700">
+            <h2 className="text-2xl font-bold mb-6 text-gray-800 dark:text-white">Create New Order</h2>
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Customer</label>
+                <select {...register('customer_id', { required: true })} className="w-full px-3 py-2 border dark:border-dark-700 dark:bg-dark-900 dark:text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                  <option value="">Select a customer...</option>
+                  {customers.map(c => (
+                    <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>
+                  ))}
+                </select>
+                {errors.customer_id && <span className="text-red-500 text-xs">Please select a customer</span>}
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Order Items</label>
+                  <button type="button" onClick={() => append({ product_id: '', quantity: 1 })} className="text-sm text-primary-600 dark:text-primary-500 hover:text-primary-700 dark:hover:text-primary-400 font-medium">
+                    + Add Item
+                  </button>
+                </div>
+                
+                <div className="space-y-3">
+                  {fields.map((field, index) => {
+                    const selectedProductId = watchItems[index]?.product_id;
+                    const selectedProduct = products.find(p => p.id === parseInt(selectedProductId));
+                    
+                    return (
+                      <div key={field.id} className="flex gap-3 items-start bg-gray-50 dark:bg-dark-900/50 p-3 rounded-lg border dark:border-dark-700">
+                        <div className="flex-grow">
+                          <select 
+                            {...register(`items.${index}.product_id`, { required: true })}
+                            className="w-full px-3 py-2 border dark:border-dark-700 dark:bg-dark-800 dark:text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white mb-1"
+                          >
+                            <option value="">Select product...</option>
+                            {products.map(p => (
+                              <option key={p.id} value={p.id} disabled={p.quantity_in_stock === 0}>
+                                {p.product_name} - ${p.price} ({p.quantity_in_stock} in stock)
+                              </option>
+                            ))}
+                          </select>
+                          {errors.items?.[index]?.product_id && <span className="text-red-500 text-xs block">Required</span>}
+                        </div>
+                        <div className="w-24">
+                          <input 
+                            type="number" 
+                            {...register(`items.${index}.quantity`, { 
+                              required: true, 
+                              min: 1,
+                              validate: value => {
+                                if (!selectedProduct) return true;
+                                return parseInt(value) <= selectedProduct.quantity_in_stock || 'Exceeds stock';
+                              }
+                            })}
+                            className="w-full px-3 py-2 border dark:border-dark-700 dark:bg-dark-800 dark:text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500" 
+                            placeholder="Qty"
+                          />
+                          {errors.items?.[index]?.quantity && <span className="text-red-500 text-xs block">{errors.items[index].quantity.message || 'Invalid'}</span>}
+                        </div>
+                        {fields.length > 1 && (
+                          <button type="button" onClick={() => remove(index)} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors mt-0.5">
+                            <Trash2 size={18} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center bg-gray-100 dark:bg-dark-700 p-4 rounded-lg">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">Total Amount:</span>
+                <span className="text-2xl font-bold text-gray-900 dark:text-white">${calculateTotal().toFixed(2)}</span>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t dark:border-dark-700">
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-dark-700 rounded-lg transition-colors">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors font-medium">Place Order</button>
+              </div>
+            </form>
           </div>
         </div>
-      </Modal>
+      )}
     </div>
   );
 };
